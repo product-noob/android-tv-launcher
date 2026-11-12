@@ -400,9 +400,19 @@ fun HomeScreen(
                 ) {
                     Spacer(Modifier.height(36.dp))
                     Header(now, onWifi, onSettings, onPicture, onSound)
-                    if (hero != null) {
+                    val movingLabel = movingId?.let { id -> byPackage[id]?.label }
+                    if (hdmiDevice != null) {
                         Spacer(Modifier.height(18.dp))
-                        val movingLabel = movingId?.let { id -> byPackage[id]?.label }
+                        HdmiHero(
+                            device = hdmiDevice,
+                            asleep = hdmiAsleep,
+                            label = movingLabel?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" },
+                            button = heroButton,
+                            onOpen = { onLaunch(hdmiDevice) },
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    } else if (showTrending && hero != null) {
+                        Spacer(Modifier.height(18.dp))
                         Hero(
                             title = hero,
                             label = movingLabel?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" } ?: "Trending this week",
@@ -430,9 +440,9 @@ fun HomeScreen(
                         FavouriteTileHeight,
                         FavouriteTileShape,
                     )
-                    if (inputs.isNotEmpty()) {
+                    if (otherInputs.isNotEmpty()) {
                         ShelfLabel("Inputs")
-                        Shelf(inputs, rememberLazyListState(), null, onLaunch, {}, onFocused)
+                        Shelf(otherInputs, rememberLazyListState(), null, onLaunch, {}, onFocused)
                     }
                     if (recents.isNotEmpty()) {
                         ShelfLabel("Recent")
