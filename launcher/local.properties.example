@@ -14,3 +14,8 @@ tmdb.region=
 
 # What to show: all (movies + shows), movie or tv
 tmdb.feed=all
+
+# Optional: AI wallpapers. tools/wallpapers.py uses this key to generate the dawn/day/dusk/night set
+# (without it, it makes gradient placeholders). Only the script reads it; it is not built into the app.
+openai.key=
+openai.image_model=gpt-image-1
