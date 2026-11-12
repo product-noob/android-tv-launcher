@@ -18,4 +18,5 @@ tmdb.feed=all
 # Optional: AI wallpapers. tools/wallpapers.py uses this key to generate the dawn/day/dusk/night set
 # (without it, it makes gradient placeholders). Only the script reads it; it is not built into the app.
 openai.key=
-openai.image_model=gpt-image-1
+openai.image_model=gpt-image-2.6-sunburst
+openai.image_size=1536x1024

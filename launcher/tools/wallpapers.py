@@ -1,13 +1,16 @@
 """Makes the home screen's time-of-day wallpapers: app/src/main/res/drawable-nodpi/wallpaper_{dawn,day,dusk,night}.jpg
 
-    python tools/wallpapers.py            # AI art if openai.key is in local.properties, else gradient placeholders
+    python tools/wallpapers.py                        # AI art if openai.key is in local.properties, else placeholders
     python tools/wallpapers.py --placeholder
-    python tools/wallpapers.py --only dusk
+    python tools/wallpapers.py --only dusk            # relight the existing night image as dusk
+    python tools/wallpapers.py --only night --fresh   # a new base scene (then rerun the others)
 
-AI mode calls the OpenAI Images API once per part of the day (same scene, different light) and saves 1920x1080
-JPEGs. Settings in local.properties (gitignored; the key is never printed or committed):
+AI mode generates the base part (night) from the prompt, then relights that image for the other parts through the
+edits endpoint, so all four are the same place in different light and the crossfade looks like time passing.
+Saves 1920x1080 JPEGs. Settings in local.properties (gitignored; the key is never printed or committed):
     openai.key=sk-...
-    openai.image_model=gpt-image-1      (optional)
+    openai.image_model=gpt-image-2.6-sunburst   (optional)
+    openai.image_size=2048x1152                 (optional; 16:9 if the model takes it, else 1536x1024 is cropped)
 Needs Pillow and numpy.
 """
 import argparse
@@ -25,6 +28,8 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent  # launcher/
 OUT = ROOT / "app/src/main/res/drawable-nodpi"
 WIDTH, HEIGHT = 1920, 1080
+API = "https://api.openai.com/v1/images"
+CRLF = "\r\n"
 
 # One place, four lights, so the screen changes through the day like a window, not a slideshow.
 # Composition rules keep the UI readable: calm, darker left and lower thirds (hero text, app rows), interest upper right.
@@ -42,6 +47,10 @@ LIGHT = {
     "night": "Night: near-black navy sky with faint stars and a thin moonlit glow on the ridges, very dark and quiet, "
              "mostly black so it is gentle on an OLED screen.",
 }
+RELIGHT = (
+    "Keep this exact photograph: the same mountains, ridgelines, shoreline, lake, framing and camera position, "
+    "nothing added, removed or moved. Change only the time of day and the light. "
+)
 
 # Placeholder palettes: (top colour, bottom colour, [(x, y, radius, colour, strength), ...]) in 0..1 coordinates
 PLACEHOLDER = {
@@ -100,18 +109,9 @@ def placeholder(part):
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
 
 
-def generate(part, key, model):
-    body = json.dumps({
-        "model": model,
-        "prompt": f"{SCENE} {LIGHT[part]}",
-        "size": "1536x1024",
-        "quality": "high",
-        "n": 1,
-    }).encode()
+def call_api(part, key, endpoint, body, content_type):
     request = urllib.request.Request(
-        "https://api.openai.com/v1/images/generations",
-        data=body,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        f"{API}/{endpoint}", data=body, headers={"Authorization": f"Bearer {key}", "Content-Type": content_type}
     )
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -127,20 +127,48 @@ def generate(part, key, model):
     return fit_16x9(Image.open(io.BytesIO(raw)))
 
 
+def generate(part, key, model, size):
+    body = json.dumps({"model": model, "prompt": f"{SCENE} {LIGHT[part]}", "size": size, "quality": "high", "n": 1})
+    return call_api(part, key, "generations", body.encode(), "application/json")
+
+
+def relight(part, reference, key, model, size):
+    # Same place in a different light: multipart upload of the base image to the edits endpoint
+    boundary = "wallpaper-boundary-7d1f"
+    fields = {"model": model, "prompt": f"{RELIGHT}{LIGHT[part]} {SCENE}", "size": size, "quality": "high", "n": "1"}
+    body = b""
+    for name, value in fields.items():
+        body += f'--{boundary}{CRLF}Content-Disposition: form-data; name="{name}"{CRLF}{CRLF}{value}{CRLF}'.encode()
+    body += (
+        f'--{boundary}{CRLF}Content-Disposition: form-data; name="image"; filename="{reference.name}"{CRLF}'
+        f"Content-Type: image/jpeg{CRLF}{CRLF}"
+    ).encode() + reference.read_bytes() + CRLF.encode()
+    body += f"--{boundary}--{CRLF}".encode()
+    return call_api(part, key, "edits", body, f"multipart/form-data; boundary={boundary}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--placeholder", action="store_true", help="gradient placeholders even if a key is set")
     parser.add_argument("--only", choices=list(LIGHT), help="just one part of the day")
+    parser.add_argument("--base", choices=list(LIGHT), default="night",
+                        help="the part generated from the prompt alone; the others relight it (default: night)")
+    parser.add_argument("--fresh", action="store_true", help="with --only: generate from scratch instead of relighting")
     args = parser.parse_args()
     props = local_properties()
     key = props.get("openai.key", "")
-    model = props.get("openai.image_model", "") or "gpt-image-1"
-    for part in [args.only] if args.only else list(LIGHT):
-        if key and not args.placeholder:
-            print(f"Generating {part} with {model}...")
-            save(generate(part, key, model), part)
-        else:
+    model = props.get("openai.image_model", "") or "gpt-image-2.6-sunburst"
+    size = props.get("openai.image_size", "") or "1536x1024"
+    parts = [args.only] if args.only else [args.base] + [p for p in LIGHT if p != args.base]
+    for part in parts:
+        if not key or args.placeholder:
             save(placeholder(part), part)
+        elif part == args.base or args.fresh:
+            print(f"Generating {part} with {model}...")
+            save(generate(part, key, model, size), part)
+        else:
+            print(f"Relighting wallpaper_{args.base} as {part} with {model}...")
+            save(relight(part, OUT / f"wallpaper_{args.base}.jpg", key, model, size), part)
 
 
 if __name__ == "__main__":
