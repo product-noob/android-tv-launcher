@@ -192,7 +192,14 @@ fun HomeScreen(
     var refocus by remember { mutableIntStateOf(0) }
     val scroll = rememberScrollState()
     val favouritesRow = rememberLazyListState()
+    val allAppsRow = rememberLazyListState()
+    var orderIds by remember { mutableStateOf(loadAppOrder(context)) }
     val firstTile = remember { FocusRequester() }
+    // First tile of each lower row: Down jumps there directly. Those rows start below the screen edge, and Compose
+    // won't move focus to a tile it can't see; it scrolls a bit instead, so Down looked like it did nothing.
+    val inputsHead = remember { FocusRequester() }
+    val recentHead = remember { FocusRequester() }
+    val allAppsHead = remember { FocusRequester() }
     var inputsLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
@@ -213,17 +220,21 @@ fun HomeScreen(
     val favourites = favouriteIds.mapNotNull { byPackage[it] }
     // Favourites are already one row up
     val recents = recentIds.filter { it !in favouriteIds }.mapNotNull { byPackage[it] }.take(RECENT_COUNT)
+    // Moved apps first, in their saved order; the rest stay alphabetical (sortedBy is stable)
     val others = apps.filter { it.packageName !in favouriteIds }
+        .sortedBy { app -> orderIds.indexOf(app.packageName).let { if (it < 0) Int.MAX_VALUE else it } }
 
     fun updateFavourites(ids: List<String>) {
         favouriteIds = ids
         saveFavourites(context, ids)
     }
 
-    // Move mode: left/right shifts the tile, OK or Back finishes
+    // Move mode, in the top row or All apps: left/right shifts the tile, OK or Back finishes
     fun handleMoveKey(key: Key): Boolean {
         val id = movingId ?: return false
-        val from = favourites.indexOfFirst { it.packageName == id }
+        val inFavourites = id in favouriteIds
+        val row = if (inFavourites) favourites else others
+        val from = row.indexOfFirst { it.packageName == id }
         val to = when (key) {
             Key.DirectionLeft -> from - 1
             Key.DirectionRight -> from + 1
@@ -235,14 +246,21 @@ fun HomeScreen(
             }
             else -> return true
         }
-        if (from < 0 || to !in favourites.indices) return true
-        updateFavourites(favourites.map { it.packageName }.toMutableList().apply { add(to, removeAt(from)) })
-        // Focus stays on the moved tile but nothing scrolls it into view, so do it by hand. The row starts with the
-        // HDMI device's tile, which isn't a favourite, so row positions are one more than favourite positions.
-        val item = to + if (hdmiDevice != null) 1 else 0
-        if (!favouritesRow.isFullyVisible(item)) {
-            val first = favouritesRow.firstVisibleItemIndex
-            scope.launch { favouritesRow.animateScrollToItem(if (item <= first) item else first + 1) }
+        if (from < 0 || to !in row.indices) return true
+        val reordered = row.map { it.packageName }.toMutableList().apply { add(to, removeAt(from)) }
+        if (inFavourites) {
+            updateFavourites(reordered)
+        } else {
+            orderIds = reordered
+            saveAppOrder(context, reordered)
+        }
+        // Focus stays on the moved tile but nothing scrolls it into view, so do it by hand. The top row starts with
+        // the HDMI device's tile, which isn't a favourite, so its positions are one more than favourite positions.
+        val state = if (inFavourites) favouritesRow else allAppsRow
+        val item = to + if (inFavourites && hdmiDevice != null) 1 else 0
+        if (!state.isFullyVisible(item)) {
+            val first = state.firstVisibleItemIndex
+            scope.launch { state.animateScrollToItem(if (item <= first) item else first + 1) }
         }
         return true
     }

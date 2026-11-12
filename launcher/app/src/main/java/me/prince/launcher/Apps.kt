@@ -68,6 +68,23 @@ fun saveFavourites(context: Context, packages: List<String>) {
         .apply()
 }
 
+// The All apps row's order after Move; apps not in it follow alphabetically
+private const val KEY_ORDER = "order"
+
+fun loadAppOrder(context: Context): List<String> =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(KEY_ORDER, null)
+        ?.split(',')
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+
+fun saveAppOrder(context: Context, packages: List<String>) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(KEY_ORDER, packages.joinToString(","))
+        .apply()
+}
+
 // Most recent first. Empty until granted: adb shell appops set me.prince.launcher GET_USAGE_STATS allow
 fun recentPackages(context: Context): List<String> {
     val usage = context.getSystemService(UsageStatsManager::class.java)
