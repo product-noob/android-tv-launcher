@@ -5,6 +5,19 @@ val localProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 
+// UI font: app/fonts/inter.ttf, or any variable font with wght + opsz axes named by ui.font in local.properties
+// (e.g. a font you may not redistribute, kept outside the repo). It's copied in as res/font/ui.ttf; ui.font.opsz
+// gives its text and display optical sizes (Inter: 14,32).
+val uiFont = localProperties.getProperty("ui.font", "").takeIf { it.isNotBlank() }?.let { file(it) }
+    ?.takeIf { it.exists() } ?: file("fonts/inter.ttf")
+val uiFontOpsz = localProperties.getProperty("ui.font.opsz", "").ifBlank { "14,32" }.split(",").map { it.trim() }
+val generatedRes = layout.buildDirectory.dir("generated/uiFont/res").get().asFile
+copy {
+    from(uiFont)
+    into(File(generatedRes, "font"))
+    rename { "ui.ttf" }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -24,7 +37,10 @@ android {
         buildConfigField("String", "TMDB_KEY", "\"${localProperties.getProperty("tmdb.key", "")}\"")
         buildConfigField("String", "TMDB_REGION", "\"${localProperties.getProperty("tmdb.region", "")}\"")
         buildConfigField("String", "TMDB_FEED", "\"${localProperties.getProperty("tmdb.feed", "all")}\"")
+        buildConfigField("float", "UI_FONT_OPSZ_TEXT", "${uiFontOpsz[0]}f")
+        buildConfigField("float", "UI_FONT_OPSZ_DISPLAY", "${uiFontOpsz[1]}f")
     }
+    sourceSets["main"].res.srcDir(generatedRes)
 
     buildTypes {
         release {
