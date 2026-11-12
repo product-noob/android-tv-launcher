@@ -163,7 +163,7 @@ adb -s $S shell pm disable-user --user 0 com.google.android.tvlauncher
 - **Favourites:** long-press a tile → Move / Add to favourites / Remove. The order is saved on the TV. The defaults for a fresh install are at the top of `Apps.kt`.
 - **OLED care:** set `OLED_CARE = false` at the top of `HomeScreen.kt` on an LCD TV.
 - **Streaming apps for the trending button:** add TMDB provider ids and Android TV package names to `PROVIDER_APPS` in `Trending.kt`.
-- **Font:** replace `res/font/inter.ttf` with any variable font that has `wght` and `opsz` axes.
+- **Font:** set `ui.font=<path>` (and `ui.font.opsz=<text>,<display>`) in `local.properties` to use any variable font with `wght` and `opsz` axes; the default is `app/fonts/inter.ttf`.
 
 ## Undo everything
 

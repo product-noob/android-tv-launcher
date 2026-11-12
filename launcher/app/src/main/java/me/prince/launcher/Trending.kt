@@ -47,8 +47,8 @@ data class TrendingTitle(
     val backdropJpeg: ByteArray,
     // Blurred copy for glass surfaces drawn over it
     val frosted: ImageBitmap,
-    // Null when TMDB has no logo or it's too dark to read on the backdrop
-    val logo: ImageBitmap?,
+    // Null when TMDB has no logo or it's too dark to read on the backdrop. Compressed like the backdrop.
+    val logoPng: ByteArray?,
     val action: Intent?,
     val actionLabel: String?,
 )
@@ -84,11 +84,11 @@ fun fetchTrending(context: Context): List<TrendingTitle> {
     }
 }
 
-private fun toTitle(context: Context, key: String, item: JSONObject): TrendingTitle {
+// [opens]: the button, when it's already known (the app whose top titles these are); else looked up per title
+private fun toTitle(context: Context, key: String, item: JSONObject, opens: Pair<Intent?, String?>? = null): TrendingTitle {
     val type = item.getString("media_type")
-    val details = JSONObject(
-        tmdbGet("/$type/${item.getInt("id")}?append_to_response=external_ids,watch/providers,images&include_image_language=en,null", key)
-    )
+    val append = if (opens == null) "external_ids,watch/providers,images" else "images"
+    val details = JSONObject(tmdbGet("/$type/${item.getInt("id")}?append_to_response=$append&include_image_language=en,null", key))
     val title = item.optString("title").ifBlank { item.optString("name") }
     val year = item.optString("release_date").ifBlank { item.optString("first_air_date") }.take(4)
     val genre = details.optJSONArray("genres")?.optJSONObject(0)?.optString("name").orEmpty()
@@ -103,9 +103,9 @@ private fun toTitle(context: Context, key: String, item: JSONObject): TrendingTi
     val logoPath = details.optJSONObject("images")?.optJSONArray("logos")?.objects()
         ?.firstOrNull { it.optString("iso_639_1") == "en" }
         ?.optString("file_path")
-    val logo = logoPath?.let { decode(httpBytes("$IMAGES/w500$it")) }?.takeIf { isLightEnough(it) }
+    val logoPng = logoPath?.let { httpBytes("$IMAGES/w500$it") }?.takeIf { isLightEnough(decode(it)) }
 
-    val (action, label) = watchAction(context, type, details)
+    val (action, label) = opens ?: watchAction(context, type, details)
     val backdropJpeg = httpBytes("$IMAGES/w1280${item.getString("backdrop_path")}")
     return TrendingTitle(
         title = title,
@@ -113,7 +113,7 @@ private fun toTitle(context: Context, key: String, item: JSONObject): TrendingTi
         overview = item.optString("overview"),
         backdropJpeg = backdropJpeg,
         frosted = frostedBackdrop(decode(backdropJpeg), BACKDROP_HEIGHT_FRACTION),
-        logo = logo?.asImageBitmap(),
+        logoPng = logoPng,
         action = action,
         actionLabel = label,
     )
@@ -138,6 +138,64 @@ private fun watchAction(context: Context, type: String, details: JSONObject): Pa
 }
 
 fun TrendingTitle.decodeBackdrop(): ImageBitmap = decode(backdropJpeg).asImageBitmap()
+fun TrendingTitle.decodeLogo(): ImageBitmap? = logoPng?.let { decode(it).asImageBitmap() }
+
+// Streaming apps whose tile fills the top of the home screen with their most popular titles, like tvOS's top shelf:
+// package → TMDB watch-provider ids ("|" = either). YouTube has no TMDB catalogue. Ids: /watch/providers/tv?watch_region=IN
+val TOP_SHELF_PROVIDERS = mapOf(
+    "com.netflix.ninja" to "8",
+    "com.amazon.amazonvideo.livingroom" to "119",
+    "in.startv.hotstar" to "2336",                    // JioHotstar
+    "com.sonyliv" to "237",                           // Sony LIV
+    "com.apple.atve.androidtv.appletv" to "350",      // Apple TV app (Apple TV+)
+)
+private const val TOP_SHELF_TITLES = 6
+// "Popular now", not "popular ever": shows that started in the last two years (with any recent episode, 25-year-old
+// procedurals and wrestling win), movies released in the last year
+private const val TOP_SHELF_SHOW_DAYS = 730L
+private const val TOP_SHELF_MOVIE_DAYS = 365L
+// News, reality, soap, talk
+private const val TOP_SHELF_SKIP_TV_GENRES = "10763,10764,10766,10767"
+
+// What's popular on one streaming app in REGION right now. TMDB has no per-service charts, so this is TMDB
+// popularity among titles that app streams. The button opens the app (TMDB doesn't know Netflix/Prime title ids).
+fun fetchTopShelf(context: Context, packageName: String, appLabel: String): List<TrendingTitle> {
+    val key = BuildConfig.TMDB_KEY
+    val providers = TOP_SHELF_PROVIDERS[packageName]
+    if (key.isBlank() || providers == null) return emptyList()
+    val open = context.packageManager.getLeanbackLaunchIntentForPackage(packageName)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val today = java.time.LocalDate.now()
+    val common = "watch_region=$REGION&with_watch_providers=${Uri.encode(providers)}&with_watch_monetization_types=flatrate" +
+        "&sort_by=popularity.desc&include_adult=false"
+    return try {
+        val shows = JSONObject(tmdbGet(
+            "/discover/tv?$common&first_air_date.gte=${today.minusDays(TOP_SHELF_SHOW_DAYS)}&without_genres=$TOP_SHELF_SKIP_TV_GENRES", key
+        )).getJSONArray("results").objects().filter { !it.isNull("backdrop_path") }.onEach { it.put("media_type", "tv") }
+        val movies = JSONObject(tmdbGet(
+            "/discover/movie?$common&primary_release_date.gte=${today.minusDays(TOP_SHELF_MOVIE_DAYS)}", key
+        )).getJSONArray("results").objects().filter { !it.isNull("backdrop_path") }.onEach { it.put("media_type", "movie") }
+        // Alternate show, movie, show...: movie popularity runs far higher, so a merged sort would be all movies
+        (0 until maxOf(shows.size, movies.size)).flatMap { listOfNotNull(shows.getOrNull(it), movies.getOrNull(it)) }
+            .take(TOP_SHELF_TITLES)
+            .mapNotNull { item ->
+                try {
+                    toTitle(context, key, item, open to "Open $appLabel")
+                } catch (e: IOException) {
+                    Log.w(TAG, "Skipping ${item.optInt("id")}", e)
+                    null
+                } catch (e: JSONException) {
+                    Log.w(TAG, "Skipping ${item.optInt("id")}", e)
+                    null
+                }
+            }
+    } catch (e: IOException) {
+        Log.w(TAG, "Top shelf fetch failed for $packageName", e)
+        emptyList()
+    } catch (e: JSONException) {
+        Log.w(TAG, "Unexpected TMDB response for $packageName", e)
+        emptyList()
+    }
+}
 
 // Accepts both the v3 API key and the v4 read access token (a JWT, starts with "eyJ")
 private fun tmdbGet(path: String, key: String): String {

@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.animateDpAsState
 import android.app.Activity
 import android.content.Intent
+import android.os.SystemClock
+import android.util.Log
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -128,6 +130,10 @@ private const val HERO_ROTATE_MS = 10_000L
 private const val TRENDING_REFRESH_MS = 6 * 60 * 60_000L
 // The first TLS handshake after start often fails (AdGuard's HTTPS filtering?); the retry works
 private const val TRENDING_RETRY_MS = 15_000L
+// Feed key for this week's trending (the other feeds are keyed by package name)
+private const val TRENDING_FEED = "trending"
+// Focus has to rest on a tile this long before the top of the screen follows it
+private const val SHELF_SETTLE_MS = 300L
 private val TileShape = RoundedCornerShape(14.dp)
 private val FavouriteTileShape = RoundedCornerShape(16.dp)
 // Left/right margin for text; rows use it as content padding so tiles can run off the screen edge
@@ -187,7 +193,7 @@ fun HomeScreen(
     val scroll = rememberScrollState()
     val favouritesRow = rememberLazyListState()
     val firstTile = remember { FocusRequester() }
-    val heroButton = remember { FocusRequester() }
+    var inputsLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
         apps = withContext(Dispatchers.IO) { loadApps(context) }
@@ -195,9 +201,10 @@ fun HomeScreen(
     LaunchedEffect(resumes) {
         recentIds = withContext(Dispatchers.IO) { recentPackages(context) }
         inputs = withContext(Dispatchers.IO) { loadInputs(context) }
+        inputsLoaded = true
     }
 
-    // The HDMI device that names itself over CEC (the Apple TV) is the hero; any other inputs get a row
+    // The HDMI device that names itself over CEC (the Apple TV) leads the top row; any other inputs get their own row
     val hdmiDevice = inputs.firstOrNull { it.detail != null }
     val otherInputs = inputs.filter { it.packageName != hdmiDevice?.packageName }
     val hdmiAsleep by HdmiDevice.asleep.collectAsState()
@@ -230,15 +237,17 @@ fun HomeScreen(
         }
         if (from < 0 || to !in favourites.indices) return true
         updateFavourites(favourites.map { it.packageName }.toMutableList().apply { add(to, removeAt(from)) })
-        // Focus stays on the moved tile but nothing scrolls it into view, so do it by hand
-        if (!favouritesRow.isFullyVisible(to)) {
+        // Focus stays on the moved tile but nothing scrolls it into view, so do it by hand. The row starts with the
+        // HDMI device's tile, which isn't a favourite, so row positions are one more than favourite positions.
+        val item = to + if (hdmiDevice != null) 1 else 0
+        if (!favouritesRow.isFullyVisible(item)) {
             val first = favouritesRow.firstVisibleItemIndex
-            scope.launch { favouritesRow.animateScrollToItem(if (to <= first) to else first + 1) }
+            scope.launch { favouritesRow.animateScrollToItem(if (item <= first) item else first + 1) }
         }
         return true
     }
 
-    // Home starts on the Apple TV button when there is one, else the first favourite
+    // Home starts on the first tile of the top row: the Apple TV when there is one, so Home → OK is back on it
     LaunchedEffect(apps.isNotEmpty(), hdmiDevice != null, homePresses, refocus) {
         if (apps.isEmpty()) return@LaunchedEffect
         movingId = null
@@ -246,58 +255,92 @@ fun HomeScreen(
         favouritesRow.scrollToItem(0)
         // On cold start the tile may not be attached for a few frames; if focus is never set,
         // Android picks an arbitrary element (seen: the Settings pill)
-        (if (hdmiDevice != null) heroButton else firstTile).requestFocusWhenAttached()
+        firstTile.requestFocusWhenAttached()
     }
 
     val shownApp = focusedApp ?: favourites.firstOrNull() ?: others.firstOrNull()
     val glow by animateColorAsState(shownApp?.glow ?: Background, tween(600), label = "glow")
 
-    var trending by remember { mutableStateOf(emptyList<TrendingTitle>()) }
-    var heroIndex by remember { mutableIntStateOf(0) }
-    var heroFocused by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        // No key: nothing to fetch, ever (the retry below would otherwise wake up every 15 s for nothing)
-        if (BuildConfig.TMDB_KEY.isBlank()) return@LaunchedEffect
+    // Titles for the top of the screen, like tvOS's top shelf: each installed streaming app's popular titles, plus this
+    // week's trending when there's no HDMI device to feature. Refreshed every 6 h, in the background, only while Home
+    // is on screen (never while the Apple TV is in front); moving focus only picks from what's already here.
+    val feeds = remember { mutableStateMapOf<String, List<TrendingTitle>>() }
+    val nextFetch = remember { mutableMapOf<String, Long>() }
+    val failures = remember { mutableMapOf<String, Int>() }
+    val feedKeys = apps.map { it.packageName }.filter { it in TOP_SHELF_PROVIDERS } +
+        listOfNotNull(TRENDING_FEED.takeIf { inputsLoaded && hdmiDevice == null })
+    LaunchedEffect(visible, feedKeys) {
+        // No key: nothing to fetch, ever
+        if (!visible || BuildConfig.TMDB_KEY.isBlank() || feedKeys.isEmpty()) return@LaunchedEffect
         while (true) {
-            // Keep the old titles if a refresh fails
-            val fresh = withContext(Dispatchers.IO) { fetchTrending(context) }
-            if (fresh.isNotEmpty()) {
-                trending = fresh
-                heroIndex = 0
+            for (feed in feedKeys) {
+                if ((nextFetch[feed] ?: 0L) > SystemClock.elapsedRealtime()) continue
+                val started = SystemClock.elapsedRealtime()
+                val titles = withContext(Dispatchers.IO) {
+                    if (feed == TRENDING_FEED) fetchTrending(context) else fetchTopShelf(context, feed, byPackage[feed]?.label.orEmpty())
+                }
+                Log.i("TopShelf", "$feed: ${titles.size} titles in ${SystemClock.elapsedRealtime() - started} ms")
+                if (titles.isNotEmpty()) {
+                    feeds[feed] = titles
+                    failures.remove(feed)
+                    nextFetch[feed] = SystemClock.elapsedRealtime() + TRENDING_REFRESH_MS
+                } else {
+                    // Keep the old titles. A blip at boot retries in 15 s; a feed that keeps failing backs off to 6 h.
+                    val count = (failures[feed] ?: 0) + 1
+                    failures[feed] = count
+                    nextFetch[feed] = SystemClock.elapsedRealtime() +
+                        (TRENDING_RETRY_MS shl (count - 1).coerceAtMost(10)).coerceAtMost(TRENDING_REFRESH_MS)
+                }
             }
-            // A network blip at boot shouldn't hide the row for six hours
-            delay(if (trending.isEmpty()) TRENDING_RETRY_MS else TRENDING_REFRESH_MS)
+            val wait = feedKeys.minOf { nextFetch[it] ?: 0L } - SystemClock.elapsedRealtime()
+            delay(wait.coerceAtLeast(1_000L))
         }
     }
-    LaunchedEffect(heroIndex, heroFocused, trending) {
-        if (heroFocused || trending.size < 2) return@LaunchedEffect
-        delay(HERO_ROTATE_MS)
-        heroIndex = (heroIndex + 1) % trending.size
+
+    // The top follows focus after a short rest, so skating along the row swaps (and decodes) once, not per tile
+    var shelfApp by remember { mutableStateOf<TvApp?>(null) }
+    LaunchedEffect(focusedApp) {
+        delay(SHELF_SETTLE_MS)
+        shelfApp = focusedApp
     }
-    val hero = trending.getOrNull(heroIndex)
-    // Only the previous, current and next backdrops stay decoded
-    val backdrops = remember(trending) { mutableStateMapOf<Int, ImageBitmap>() }
-    LaunchedEffect(trending, heroIndex) {
-        if (trending.isEmpty()) return@LaunchedEffect
-        val keep = listOf(heroIndex, heroIndex + 1, heroIndex - 1).map { it.mod(trending.size) }
-        (backdrops.keys - keep.toSet()).forEach { backdrops.remove(it) }
+    val shelfTitles = shelfApp?.let { feeds[it.packageName] }.orEmpty()
+    val heroTitles = shelfTitles.ifEmpty { if (hdmiDevice == null) feeds[TRENDING_FEED].orEmpty() else emptyList() }
+    val heroLabel = if (shelfTitles.isNotEmpty()) "Top on ${shelfApp?.label}" else "Trending this week"
+    var heroIndex by remember(heroTitles) { mutableIntStateOf(0) }
+    var heroFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(heroIndex, heroFocused, heroTitles, visible) {
+        if (!visible || heroFocused || heroTitles.size < 2) return@LaunchedEffect
+        delay(HERO_ROTATE_MS)
+        heroIndex = (heroIndex + 1) % heroTitles.size
+    }
+    val hero = heroTitles.getOrNull(heroIndex)
+    // Only the current and next titles are decoded, and none while Home is hidden
+    val decoded = remember(heroTitles) { mutableStateMapOf<Int, ShownTitle>() }
+    LaunchedEffect(heroTitles, heroIndex, visible) {
+        if (!visible || heroTitles.isEmpty()) {
+            decoded.clear()
+            return@LaunchedEffect
+        }
+        val keep = listOf(heroIndex, (heroIndex + 1) % heroTitles.size)
+        (decoded.keys - keep.toSet()).forEach { decoded.remove(it) }
         for (i in keep) {
-            if (i !in backdrops) backdrops[i] = withContext(Dispatchers.Default) { trending[i].decodeBackdrop() }
+            if (i !in decoded) decoded[i] = withContext(Dispatchers.Default) { ShownTitle(heroTitles[i]) }
         }
     }
     fun stepHero(by: Int) {
-        heroIndex = (heroIndex + by).mod(trending.size)
+        heroIndex = (heroIndex + by).mod(heroTitles.size)
     }
 
     val now = rememberNow()
-    // Trending only stands in for the hero when there's no HDMI device; otherwise the living wallpaper is the backdrop
-    val showTrending = hdmiDevice == null && hero != null
     val part = dayPart(now.hour)
-    // Decoded only while the home screen is on screen; ~8 MB freed the moment an app or input takes over
-    val wallpaper by produceState<Wallpaper?>(null, visible, part, showTrending) {
-        value = if (visible && !showTrending) withContext(Dispatchers.Default) { loadWallpaper(context, part) } else null
+    // Decoded only while the home screen is on screen; ~8 MB freed the moment an app or input takes over.
+    // Not keyed on the titles: moving focus between apps must not decode it again.
+    val wallpaper by produceState<Wallpaper?>(null, visible, part) {
+        value = if (visible) withContext(Dispatchers.Default) { loadWallpaper(context, part) } else null
     }
-    val driftClock = rememberDriftClock(visible && !showTrending)
+    val driftClock = rememberDriftClock(visible)
+    // Fades the wallpaper to black under an app's titles (read in the draw phase: no recomposition while it animates)
+    val wallpaperCover = animateFloatAsState(if (hero != null) 1f else 0f, tween(1200), label = "cover")
     var keyPresses by remember { mutableIntStateOf(0) }
     var idle by remember { mutableStateOf(false) }
     LaunchedEffect(keyPresses, resumes) {
@@ -357,14 +400,14 @@ fun HomeScreen(
                     .background(Background)
                     .drawBehind {
                         // The wallpaper brings its own light; the app-colour glow is for the plain black screen
-                        if (!showTrending && wallpaper != null) return@drawBehind
+                        if (hero == null && wallpaper != null) return@drawBehind
                         drawRect(
                             Brush.radialGradient(
                                 0f to glow.copy(alpha = 0.9f),
                                 0.45f to glow.copy(alpha = 0.3f),
                                 1f to Color.Transparent,
                                 // With a backdrop up top, the glow sits behind the shelves instead
-                                center = Offset(size.width * 0.36f, size.height * if (showTrending) 0.85f else 0.42f),
+                                center = Offset(size.width * 0.36f, size.height * if (hero != null) 0.85f else 0.42f),
                                 radius = size.width * 0.6f,
                             )
                         )
@@ -379,16 +422,14 @@ fun HomeScreen(
                 val configuration = LocalConfiguration.current
                 val screenWidth = with(density) { configuration.screenWidthDp.dp.toPx() }
                 val screenSize = with(density) { Size(screenWidth, configuration.screenHeightDp.dp.toPx()) }
-                val glassSource = if (showTrending) {
-                    backdrops[heroIndex]?.let { Backdrop(it, backdropAlpha, parallax) }
-                    hero?.let {
-                        val height = screenWidth * it.frosted.height / it.frosted.width
-                        GlassSource(it.frosted, { Rect(0f, -parallax, screenWidth, height - parallax) }, { backdropAlpha })
-                    }
+                // Read in the draw phase so scrolling and fades only redraw
+                val wallpaperDim = { maxOf(wallpaperCover.value, 0.5f * (scroll.value / fadeDistance).coerceIn(0f, 1f)) }
+                LivingWallpaper(wallpaper, driftClock, wallpaperDim)
+                Backdrop(hero?.let { decoded[heroIndex]?.backdrop }, backdropAlpha, parallax)
+                val glassSource = if (hero != null) {
+                    val height = screenWidth * hero.frosted.height / hero.frosted.width
+                    GlassSource(hero.frosted, { Rect(0f, -parallax, screenWidth, height - parallax) }, { backdropAlpha })
                 } else {
-                    // Read in the draw phase so scrolling and drift only redraw
-                    val wallpaperDim = { 0.5f * (scroll.value / fadeDistance).coerceIn(0f, 1f) }
-                    LivingWallpaper(wallpaper, driftClock, wallpaperDim)
                     wallpaper?.let {
                         GlassSource(it.frosted, { wallpaperBounds(screenSize, driftClock.value) }, { 1f - wallpaperDim() })
                     }
@@ -402,41 +443,41 @@ fun HomeScreen(
                 ) {
                     Spacer(Modifier.height(36.dp))
                     Header(now, onWifi, onSettings, onPicture, onSound)
-                    val movingLabel = movingId?.let { id -> byPackage[id]?.label }
-                    if (hdmiDevice != null) {
-                        Spacer(Modifier.height(18.dp))
-                        HdmiHero(
-                            device = hdmiDevice,
-                            asleep = hdmiAsleep,
-                            label = movingLabel?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" },
-                            button = heroButton,
-                            onOpen = { onLaunch(hdmiDevice) },
-                        )
-                        Spacer(Modifier.height(4.dp))
-                    } else if (showTrending && hero != null) {
-                        Spacer(Modifier.height(18.dp))
+                    val movingHint = movingId?.let { id -> byPackage[id]?.label }?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" }
+                    Spacer(Modifier.height(18.dp))
+                    if (hero != null) {
                         Hero(
                             title = hero,
-                            label = movingLabel?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" } ?: "Trending this week",
+                            logo = decoded[heroIndex]?.logo,
+                            label = movingHint ?: heroLabel,
                             index = heroIndex,
-                            count = trending.size,
+                            count = heroTitles.size,
                             onOpen = { hero.action?.let(onOpenTrending) },
                             onStep = ::stepHero,
                             onFocusChange = { heroFocused = it },
                         )
-                        Spacer(Modifier.height(4.dp))
                     } else {
-                        Spacer(Modifier.height(132.dp))
-                        AppTitle(shownApp?.label.orEmpty(), moving = movingId != null)
+                        // The focused tile's name; for the Apple TV also its port and whether it's awake (from CEC)
+                        val featured = shelfApp ?: hdmiDevice ?: shownApp
+                        val isDevice = featured != null && featured == hdmiDevice
+                        TileHero(
+                            title = featured?.label.orEmpty(),
+                            label = movingHint ?: featured?.detail,
+                            asleep = if (isDevice) hdmiAsleep else null,
+                            showStatus = isDevice,
+                        )
                     }
+                    Spacer(Modifier.height(4.dp))
                     val onFocused = { app: TvApp -> focusedApp = app }
                     val onMenu = { app: TvApp -> openMenu(MenuTarget(app, canMove = false)) }
+                    // tvOS-style top row: the Apple TV first (OK opens it, which also wakes it over CEC), then favourites
+                    val topRow = listOfNotNull(hdmiDevice) + favourites
                     Shelf(
-                        favourites,
+                        topRow,
                         favouritesRow,
-                        firstTile.takeIf { favourites.isNotEmpty() },
+                        firstTile.takeIf { topRow.isNotEmpty() },
                         onLaunch,
-                        { openMenu(MenuTarget(it, canMove = true)) },
+                        { if (!it.isInput) openMenu(MenuTarget(it, canMove = true)) },
                         onFocused,
                         FavouriteTileWidth,
                         FavouriteTileHeight,
@@ -451,7 +492,7 @@ fun HomeScreen(
                         Shelf(recents, rememberLazyListState(), null, onLaunch, onMenu, onFocused)
                     }
                     ShelfLabel("All apps")
-                    Shelf(others, rememberLazyListState(), firstTile.takeIf { favourites.isEmpty() }, onLaunch, onMenu, onFocused)
+                    Shelf(others, rememberLazyListState(), firstTile.takeIf { topRow.isEmpty() }, onLaunch, onMenu, onFocused)
                     Spacer(Modifier.height(40.dp))
                 }
                 }
@@ -504,38 +545,13 @@ private suspend fun FocusRequester.requestFocusWhenAttached() {
     }
 }
 
-// Fallback heading when there's no trending row (no TMDB key or offline)
-@Composable
-private fun AppTitle(label: String, moving: Boolean) {
-    Row(Modifier.padding(horizontal = EdgePadding), verticalAlignment = Alignment.Bottom) {
-        Text(
-            text = label,
-            color = TextPrimary,
-            fontSize = 44.sp,
-            fontFamily = UiDisplay,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        if (moving) {
-            Spacer(Modifier.width(20.dp))
-            Text(
-                "◀ ▶ to move, OK to finish",
-                color = TextSecondary,
-                fontSize = 15.sp,
-                modifier = Modifier.padding(bottom = 10.dp),
-            )
-        }
-    }
-}
-
 // Full-width art behind the header, faded so the text on the left and the shelves below stay readable.
 // Top-aligned so frostedBackdrop() can line its blurred copy up with it.
 @Composable
-private fun Backdrop(image: ImageBitmap, alpha: Float, parallax: Float) {
+private fun Backdrop(image: ImageBitmap?, alpha: Float, parallax: Float) {
+    // Null fades the art out (back to the wallpaper)
     Crossfade(image, animationSpec = tween(1200), label = "backdrop") { shown ->
-        Image(
+        if (shown != null) Image(
             shown,
             contentDescription = null,
             contentScale = ContentScale.Crop,
@@ -569,6 +585,7 @@ private fun Backdrop(image: ImageBitmap, alpha: Float, parallax: Float) {
 @Composable
 private fun Hero(
     title: TrendingTitle,
+    logo: ImageBitmap?,
     label: String,
     index: Int,
     count: Int,
@@ -579,9 +596,9 @@ private fun Hero(
     Column(Modifier.height(HeroHeight).padding(horizontal = EdgePadding)) {
         Text(label, color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(10.dp))
-        if (title.logo != null) {
+        if (logo != null) {
             Image(
-                title.logo,
+                logo,
                 contentDescription = title.title,
                 contentScale = ContentScale.Fit,
                 alignment = Alignment.CenterStart,
@@ -637,26 +654,20 @@ private fun Hero(
     }
 }
 
-// The HDMI device you mostly watch (Apple TV), front and centre: its name, whether it's awake (from CEC) and one
-// button, focused when Home opens, so Home → OK is back on the Apple TV. Opening the input also wakes it over CEC.
+// The focused tile, big: its name, and for the HDMI device (Apple TV) whether it's awake (from CEC). No button: the
+// tile itself opens it. Same height as Hero so the rows don't jump when focus moves between apps.
 @Composable
-private fun HdmiHero(
-    device: TvApp,
-    asleep: Boolean?,
-    label: String?,
-    button: FocusRequester,
-    onOpen: () -> Unit,
-) {
+private fun TileHero(title: String, label: String?, asleep: Boolean?, showStatus: Boolean) {
     val (status, dot) = when (asleep) {
         false -> "On" to Color(0xFF34C759)
         true -> "Asleep" to Color.White.copy(alpha = 0.4f)
         null -> "Connected" to Color.White.copy(alpha = 0.6f)
     }
     Column(Modifier.height(HeroHeight).padding(horizontal = EdgePadding)) {
-        Text(label ?: device.detail.orEmpty(), color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(label.orEmpty(), color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(6.dp))
         Text(
-            device.label,
+            title,
             color = TextPrimary,
             fontSize = 64.sp,
             fontFamily = UiDisplay,
@@ -664,20 +675,21 @@ private fun HdmiHero(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(dot, CircleShape))
-            Spacer(Modifier.width(8.dp))
-            Text(status, color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        if (showStatus) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).background(dot, CircleShape))
+                Spacer(Modifier.width(8.dp))
+                Text(status, color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            }
         }
-        Spacer(Modifier.weight(1f))
-        Pill(
-            R.drawable.ic_play,
-            if (asleep == true) "Wake ${device.label}" else "Open ${device.label}",
-            onOpen,
-            Modifier.focusRequester(button),
-        )
     }
+}
+
+// A title ready to show: its backdrop and logo decoded (they're kept compressed otherwise)
+private class ShownTitle(title: TrendingTitle) {
+    val backdrop = title.decodeBackdrop()
+    val logo = title.decodeLogo()
 }
 
 // Apple-style page control: the current page is a wider capsule

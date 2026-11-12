@@ -20,3 +20,8 @@ tmdb.feed=all
 openai.key=
 openai.image_model=gpt-image-2.6-sunburst
 openai.image_size=1536x1024
+
+# Optional: a different UI font, kept outside the repo (any variable font with wght + opsz axes).
+# ui.font.opsz = its text and display optical sizes. Leave empty for Inter (14,32).
+ui.font=
+ui.font.opsz=
