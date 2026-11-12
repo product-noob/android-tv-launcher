@@ -153,6 +153,7 @@ fun HomeScreen(
     reloadKey: Int,
     homePresses: Int,
     resumes: Int,
+    visible: Boolean,
     onLaunch: (TvApp) -> Unit,
     onAppInfo: (TvApp) -> Unit,
     onWifi: () -> Unit,
@@ -184,6 +185,7 @@ fun HomeScreen(
     val scroll = rememberScrollState()
     val favouritesRow = rememberLazyListState()
     val firstTile = remember { FocusRequester() }
+    val heroButton = remember { FocusRequester() }
 
     LaunchedEffect(reloadKey) {
         apps = withContext(Dispatchers.IO) { loadApps(context) }
@@ -192,6 +194,11 @@ fun HomeScreen(
         recentIds = withContext(Dispatchers.IO) { recentPackages(context) }
         inputs = withContext(Dispatchers.IO) { loadInputs(context) }
     }
+
+    // The HDMI device that names itself over CEC (the Apple TV) is the hero; any other inputs get a row
+    val hdmiDevice = inputs.firstOrNull { it.detail != null }
+    val otherInputs = inputs.filter { it.packageName != hdmiDevice?.packageName }
+    val hdmiAsleep by HdmiDevice.asleep.collectAsState()
 
     val byPackage = remember(apps) { apps.associateBy { it.packageName } }
     val favourites = favouriteIds.mapNotNull { byPackage[it] }
