@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
     private var homePresses by mutableIntStateOf(0)
     private var resumes by mutableIntStateOf(0)
     // False while another app or an HDMI input is in front: the home screen pauses its timers and lets go of images
-    private var visible by mutableStateOf(false)
+    private var onScreen by mutableStateOf(false)
     private var firstResume = true
 
     private val packageReceiver = object : BroadcastReceiver() {
@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
                 reloadKey = reloadKey,
                 homePresses = homePresses,
                 resumes = resumes,
-                visible = visible,
+                visible = onScreen,
                 onLaunch = { if (it.isInput) launchFresh(this, it.launchIntent) else launch(this, it.launchIntent) },
                 onAppInfo = { app ->
                     launch(this, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}")))
@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        visible = true
+        onScreen = true
     }
 
     override fun onResume() {
@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        visible = false
+        onScreen = false
         super.onStop()
     }
 

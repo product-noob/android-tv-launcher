@@ -76,8 +76,10 @@ class HotwordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
-// Hands-free "Ok Google" keeps the Assistant listening all the time: about a quarter of one CPU core on a
-// MediaTek TV. Off here; the remote's mic button works either way.
+// Only needed on TVs where the Assistant is refused the mic once the stock launcher is disabled. On the Xiaomi
+// MiTV it isn't: as the system voice service it keeps listening (~25% of a core) with or without this, so the
+// CPU is saved by turning "Ok Google" off in the Assistant's settings (or the TV's mic switch), not here.
+// The remote's mic button works either way.
 const val HANDS_FREE_OK_GOOGLE = false
 
 fun startHotwordService(context: Context) {
