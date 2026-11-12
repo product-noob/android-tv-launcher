@@ -5,6 +5,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.animateDpAsState
 import android.app.Activity
@@ -632,6 +634,49 @@ private fun Hero(
             }
             PageDots(index, count)
         }
+    }
+}
+
+// The HDMI device you mostly watch (Apple TV), front and centre: its name, whether it's awake (from CEC) and one
+// button, focused when Home opens, so Home → OK is back on the Apple TV. Opening the input also wakes it over CEC.
+@Composable
+private fun HdmiHero(
+    device: TvApp,
+    asleep: Boolean?,
+    label: String?,
+    button: FocusRequester,
+    onOpen: () -> Unit,
+) {
+    val (status, dot) = when (asleep) {
+        false -> "On" to Color(0xFF34C759)
+        true -> "Asleep" to Color.White.copy(alpha = 0.4f)
+        null -> "Connected" to Color.White.copy(alpha = 0.6f)
+    }
+    Column(Modifier.height(HeroHeight).padding(horizontal = EdgePadding)) {
+        Text(label ?: device.detail.orEmpty(), color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            device.label,
+            color = TextPrimary,
+            fontSize = 64.sp,
+            fontFamily = UiDisplay,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(dot, CircleShape))
+            Spacer(Modifier.width(8.dp))
+            Text(status, color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.weight(1f))
+        Pill(
+            R.drawable.ic_play,
+            if (asleep == true) "Wake ${device.label}" else "Open ${device.label}",
+            onOpen,
+            Modifier.focusRequester(button),
+        )
     }
 }
 
