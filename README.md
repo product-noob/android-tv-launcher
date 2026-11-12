@@ -28,7 +28,7 @@ debloat/
   debloat.sh                hide every app in a list (reversible)
   restore.sh                bring one app, or all of them, back
   packages.txt              your removal list (empty template)
-  examples/xiaomi-tv.txt    the 32 packages removed from a Xiaomi OLED TV
+  examples/xiaomi-tv.txt    the 31 packages removed from a Xiaomi OLED TV
 launcher/                   the home screen (Kotlin + Jetpack Compose for TV)
   local.properties.example  SDK path and the optional TMDB settings
   third_party/Inter-OFL.txt licence for the bundled Inter font
