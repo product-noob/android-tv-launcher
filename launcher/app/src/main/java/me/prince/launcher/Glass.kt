@@ -32,8 +32,9 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
 // Android 11 has no real-time blur (RenderEffect is API 31), so glass samples a pre-blurred copy of
-// whatever is drawn behind it: the trending backdrop on the home screen, a screen capture behind the menu.
-class GlassSource(val image: ImageBitmap, val bounds: Rect, val alpha: Float = 1f)
+// whatever is drawn behind it: the wallpaper or trending backdrop on the home screen, a screen capture behind
+// the menu. Bounds and alpha are read while drawing, so a moving wallpaper only redraws the glass, never recomposes.
+class GlassSource(val image: ImageBitmap, val bounds: () -> Rect, val alpha: () -> Float = { 1f })
 
 val LocalGlassSource = compositionLocalOf<GlassSource?> { null }
 
@@ -52,12 +53,13 @@ fun Modifier.glass(shape: Shape, enabled: Boolean = true): Modifier = composed {
         .clip(shape)
         .drawBehind {
             if (source != null) {
+                val bounds = source.bounds()
                 translate(-origin.x, -origin.y) {
                     drawImage(
                         source.image,
-                        dstOffset = IntOffset(source.bounds.left.roundToInt(), source.bounds.top.roundToInt()),
-                        dstSize = IntSize(source.bounds.width.roundToInt(), source.bounds.height.roundToInt()),
-                        alpha = source.alpha,
+                        dstOffset = IntOffset(bounds.left.roundToInt(), bounds.top.roundToInt()),
+                        dstSize = IntSize(bounds.width.roundToInt(), bounds.height.roundToInt()),
+                        alpha = source.alpha(),
                         filterQuality = FilterQuality.Low,
                     )
                 }
@@ -86,6 +88,22 @@ fun frostedBackdrop(backdrop: Bitmap, heightFraction: Float): ImageBitmap {
         for (x in 0 until w) {
             val leftFade = 0.2f + 0.8f * (x / (w * 0.6f)).coerceAtMost(1f)
             val k = bottomFade * topDarken * leftFade
+            val p = px[y * w + x]
+            val r = (((p shr 16) and 0xFF) * k).toInt()
+            val g = (((p shr 8) and 0xFF) * k).toInt()
+            val b = ((p and 0xFF) * k).toInt()
+            px[y * w + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+    }
+    return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
+// The wallpaper as it appears on screen (with the readability scrim, [shade] = its alpha at x, y as fractions), blurred
+fun frostedWallpaper(wallpaper: Bitmap, shade: (Float, Float) -> Float): ImageBitmap {
+    val (w, h, px) = blurredPixels(wallpaper)
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            val k = 1f - shade(x.toFloat() / w, y.toFloat() / h)
             val p = px[y * w + x]
             val r = (((p shr 16) and 0xFF) * k).toInt()
             val g = (((p shr 8) and 0xFF) * k).toInt()
