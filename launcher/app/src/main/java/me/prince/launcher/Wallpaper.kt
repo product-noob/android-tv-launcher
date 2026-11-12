@@ -71,8 +71,10 @@ fun scrimAlpha(x: Float, y: Float): Float {
     return 1f - (1f - left) * (1f - bottom) * (1f - top)
 }
 
-// Slow drift: the image is drawn 8% larger and wanders inside that margin on two unrelated periods, so it never
-// visibly repeats. Updated 4 times a second (sub-pixel steps at ~1 px/s), not every frame: the TV's GPU stays idle.
+// Slow drift, off: the image is drawn larger and wanders inside that margin on two unrelated periods. Off because
+// sub-pixel steps make detailed photos (stars, snow, ripples) shimmer, and the enlargement softens them; still and
+// 1:1 is sharper and draws nothing while idle. DRIFT = true brings it back.
+private const val DRIFT = false
 private const val DRIFT_SCALE = 1.08f
 private const val DRIFT_X = 0.035f
 private const val DRIFT_Y = 0.03f
@@ -80,18 +82,19 @@ private const val DRIFT_PERIOD_X_S = 240f
 private const val DRIFT_PERIOD_Y_S = 170f
 private const val DRIFT_TICK_MS = 250L
 
-/** Seconds since the home screen came up, ticking only while it is visible. */
+/** Seconds since the home screen came up, ticking only while it is visible (and only if [DRIFT] is on). */
 @Composable
 fun rememberDriftClock(visible: Boolean): State<Float> = produceState(0f, visible) {
     val start = System.nanoTime()
-    while (visible) {
+    while (DRIFT && visible) {
         value = (System.nanoTime() - start) / 1e9f
         delay(DRIFT_TICK_MS)
     }
 }
 
-// Where the (enlarged) wallpaper sits on a screen of this size at time t. Glass uses it to line its blur up.
+// Where the wallpaper sits on a screen of this size at time t. Glass uses it to line its blur up.
 fun wallpaperBounds(screen: Size, t: Float): Rect {
+    if (!DRIFT) return Rect(0f, 0f, screen.width, screen.height)
     val w = screen.width * DRIFT_SCALE
     val h = screen.height * DRIFT_SCALE
     val dx = screen.width * DRIFT_X * sin(2 * PI.toFloat() * t / DRIFT_PERIOD_X_S)
