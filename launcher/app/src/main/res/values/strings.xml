@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tv_power_service_label">TV power follows Apple TV</string>
+    <string name="tv_power_service_description">Turns the TV off when the HDMI device (e.g. Apple TV) goes to sleep, and opens its input when the TV turns on.</string>
+</resources>
