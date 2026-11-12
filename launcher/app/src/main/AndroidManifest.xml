@@ -15,6 +15,16 @@
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <!-- Recent row; granted via adb appops, not a runtime prompt -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <!-- TvPowerService: CEC traffic from the log, the screensaver toggle and opening the Apple TV input from the
+         background. Granted via adb (see launcher/deploy.sh). -->
+    <uses-permission android:name="android.permission.READ_LOGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- HotwordService (hands-free "Ok Google", off by default: HANDS_FREE_OK_GOOGLE) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <queries>
         <intent>

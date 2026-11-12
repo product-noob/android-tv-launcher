@@ -76,6 +76,11 @@ class HotwordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
+// Hands-free "Ok Google" keeps the Assistant listening all the time: about a quarter of one CPU core on a
+// MediaTek TV. Off here; the remote's mic button works either way.
+const val HANDS_FREE_OK_GOOGLE = false
+
 fun startHotwordService(context: Context) {
+    if (!HANDS_FREE_OK_GOOGLE) return
     context.startForegroundService(Intent(context, HotwordService::class.java))
 }
