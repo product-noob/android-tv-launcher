@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.animateDpAsState
 import android.app.Activity
 import android.content.Intent
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
+import androidx.core.content.ContextCompat
 import android.os.SystemClock
 import android.util.Log
 import android.net.ConnectivityManager
@@ -121,12 +124,13 @@ private val Background = Color.Black
 private val TextPrimary = Color.White
 private val TextSecondary = Color.White.copy(alpha = 0.75f)
 
-private val TileWidth = 200.dp
-private val TileHeight = 112.dp
-private val FavouriteTileWidth = 240.dp
-private val FavouriteTileHeight = 135.dp
-private val HeroHeight = 230.dp
-const val BACKDROP_HEIGHT_FRACTION = 0.72f
+private val TileWidth = 152.dp
+private val TileHeight = 86.dp
+private val FavouriteTileWidth = 152.dp
+private val FavouriteTileHeight = 86.dp
+// The art fills the screen; the title sits at the bottom of this area, just above the top row
+private val HeroAreaHeight = 318.dp
+const val BACKDROP_HEIGHT_FRACTION = 1f
 private const val HERO_ROTATE_MS = 10_000L
 private const val TRENDING_REFRESH_MS = 6 * 60 * 60_000L
 // The first TLS handshake after start often fails (AdGuard's HTTPS filtering?); the retry works
@@ -150,11 +154,12 @@ private const val NIGHT_DIM = 0.25f
 private const val SHIFT_INTERVAL_MS = 120_000L
 private val ShiftOrbit = listOf(0 to 0, 3 to 1, 4 to -2, 1 to -4, -3 to -3, -4 to 1, -1 to 4, 2 to 3)
 private val MenuShape = RoundedCornerShape(28.dp)
-private const val RECENT_COUNT = 8
 private const val SHEEN_MS = 700
-private const val WEATHER_REFRESH_MS = 30 * 60_000L
 
 private data class MenuTarget(val app: TvApp, val canMove: Boolean)
+
+// The Settings tile at the end of All apps (Settings isn't a TV-launcher app on every TV)
+private const val SETTINGS_TILE = "settings"
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -165,17 +170,12 @@ fun HomeScreen(
     visible: Boolean,
     onLaunch: (TvApp) -> Unit,
     onAppInfo: (TvApp) -> Unit,
-    onWifi: () -> Unit,
-    onSettings: () -> Unit,
-    onPicture: () -> Unit,
-    onSound: () -> Unit,
     onOpenTrending: (Intent) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var apps by remember { mutableStateOf(emptyList<TvApp>()) }
     var favouriteIds by remember { mutableStateOf(loadFavourites(context)) }
-    var recentIds by remember { mutableStateOf(emptyList<String>()) }
     var inputs by remember { mutableStateOf(emptyList<TvApp>()) }
     var focusedApp by remember { mutableStateOf<TvApp?>(null) }
     var menu by remember { mutableStateOf<MenuTarget?>(null) }
@@ -199,15 +199,23 @@ fun HomeScreen(
     // First tile of each lower row: Down jumps there directly. Those rows start below the screen edge, and Compose
     // won't move focus to a tile it can't see; it scrolls a bit instead, so Down looked like it did nothing.
     val inputsHead = remember { FocusRequester() }
-    val recentHead = remember { FocusRequester() }
     val allAppsHead = remember { FocusRequester() }
+    val settingsTile = remember {
+        TvApp(
+            packageName = SETTINGS_TILE,
+            label = "Settings",
+            image = ContextCompat.getDrawable(context, R.drawable.ic_settings)!!.toBitmap(96, 96).asImageBitmap(),
+            hasBanner = false,
+            glow = Color(0xFF4A5568),
+            launchIntent = Intent(android.provider.Settings.ACTION_SETTINGS),
+        )
+    }
     var inputsLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
         apps = withContext(Dispatchers.IO) { loadApps(context) }
     }
     LaunchedEffect(resumes) {
-        recentIds = withContext(Dispatchers.IO) { recentPackages(context) }
         inputs = withContext(Dispatchers.IO) { loadInputs(context) }
         inputsLoaded = true
     }
@@ -219,8 +227,6 @@ fun HomeScreen(
 
     val byPackage = remember(apps) { apps.associateBy { it.packageName } }
     val favourites = favouriteIds.mapNotNull { byPackage[it] }
-    // Favourites are already one row up
-    val recents = recentIds.filter { it !in favouriteIds }.mapNotNull { byPackage[it] }.take(RECENT_COUNT)
     // Moved apps first, in their saved order; the rest stay alphabetical (sortedBy is stable)
     val others = apps.filter { it.packageName !in favouriteIds }
         .sortedBy { app -> orderIds.indexOf(app.packageName).let { if (it < 0) Int.MAX_VALUE else it } }
@@ -460,42 +466,41 @@ fun HomeScreen(
                         .offset { shift }
                         .verticalScroll(scroll)
                 ) {
-                    Spacer(Modifier.height(36.dp))
-                    Header(now, onWifi, onSettings, onPicture, onSound)
                     val movingHint = movingId?.let { id -> byPackage[id]?.label }?.let { "Moving $it  ·  ◀ ▶ to move, OK to finish" }
-                    Spacer(Modifier.height(18.dp))
-                    if (hero != null) {
-                        Hero(
-                            title = hero,
-                            logo = decoded[heroIndex]?.logo,
-                            label = movingHint ?: heroLabel,
-                            index = heroIndex,
-                            count = heroTitles.size,
-                            onOpen = { hero.action?.let(onOpenTrending) },
-                            onStep = ::stepHero,
-                            onFocusChange = { heroFocused = it },
-                        )
-                    } else {
-                        // The focused tile's name; for the Apple TV also its port and whether it's awake (from CEC)
-                        val featured = shelfApp ?: hdmiDevice ?: shownApp
-                        val isDevice = featured != null && featured == hdmiDevice
-                        TileHero(
-                            title = featured?.label.orEmpty(),
-                            label = movingHint ?: featured?.detail,
-                            asleep = if (isDevice) hdmiAsleep else null,
-                            showStatus = isDevice,
-                        )
+                    // tvOS-like: nothing but the art, a small clock and the title, bottom left, above one row of apps
+                    Box(Modifier.fillMaxWidth().height(HeroAreaHeight)) {
+                        Clock(now, Modifier.align(Alignment.TopEnd).padding(top = 30.dp, end = EdgePadding))
+                        Box(Modifier.align(Alignment.BottomStart)) {
+                            if (hero != null) {
+                                Hero(
+                                    title = hero,
+                                    logo = decoded[heroIndex]?.logo,
+                                    label = movingHint ?: heroLabel,
+                                    index = heroIndex,
+                                    count = heroTitles.size,
+                                    onOpen = { hero.action?.let(onOpenTrending) },
+                                    onStep = ::stepHero,
+                                    onFocusChange = { heroFocused = it },
+                                )
+                            } else {
+                                // The focused tile's name; for the Apple TV also its port and whether it's awake (from CEC)
+                                val featured = shelfApp ?: hdmiDevice ?: shownApp
+                                val isDevice = featured != null && featured == hdmiDevice
+                                TileHero(
+                                    title = featured?.label.orEmpty(),
+                                    label = movingHint ?: featured?.detail,
+                                    asleep = if (isDevice) hdmiAsleep else null,
+                                    showStatus = isDevice,
+                                )
+                            }
+                        }
                     }
-                    Spacer(Modifier.height(4.dp))
                     val onFocused = { app: TvApp -> focusedApp = app }
-                    // Recent is in recency order, so nothing to move there
-                    val onRecentMenu = { app: TvApp -> openMenu(MenuTarget(app, canMove = false)) }
-                    // tvOS-style top row: the Apple TV first (OK opens it, which also wakes it over CEC), then favourites
+                    // Top row: the Apple TV first (OK opens it, which also wakes it over CEC), then favourites
                     val topRow = listOfNotNull(hdmiDevice) + favourites
                     // Where Down goes from each row (its first tile); All apps' first tile is firstTile when the top row is empty
                     val allAppsFirst = if (topRow.isEmpty()) firstTile else allAppsHead
-                    val belowInputs = if (recents.isNotEmpty()) recentHead else allAppsFirst
-                    val belowTop = if (otherInputs.isNotEmpty()) inputsHead else belowInputs
+                    val belowTop = if (otherInputs.isNotEmpty()) inputsHead else allAppsFirst
                     Shelf(
                         topRow,
                         favouritesRow,
@@ -510,14 +515,19 @@ fun HomeScreen(
                     )
                     if (otherInputs.isNotEmpty()) {
                         ShelfLabel("Inputs")
-                        Shelf(otherInputs, rememberLazyListState(), inputsHead, onLaunch, {}, onFocused, down = belowInputs)
-                    }
-                    if (recents.isNotEmpty()) {
-                        ShelfLabel("Recent")
-                        Shelf(recents, rememberLazyListState(), recentHead, onLaunch, onRecentMenu, onFocused, down = allAppsFirst)
+                        Shelf(otherInputs, rememberLazyListState(), inputsHead, onLaunch, {}, onFocused, down = allAppsFirst)
                     }
                     ShelfLabel("All apps")
-                    Shelf(others, allAppsRow, allAppsFirst, onLaunch, { openMenu(MenuTarget(it, canMove = true)) }, onFocused)
+                    Shelf(
+                        // Settings only once the apps are in: a lazy row keeps its first visible item when the list
+                        // changes, so a row that started as just [Settings] would stay scrolled to the end
+                        if (others.isEmpty()) emptyList() else others + settingsTile,
+                        allAppsRow,
+                        allAppsFirst,
+                        onLaunch,
+                        { if (it.packageName != SETTINGS_TILE) openMenu(MenuTarget(it, canMove = true)) },
+                        onFocused,
+                    )
                     Spacer(Modifier.height(40.dp))
                 }
                 }
@@ -570,8 +580,8 @@ private suspend fun FocusRequester.requestFocusWhenAttached() {
     }
 }
 
-// Full-width art behind the header, faded so the text on the left and the shelves below stay readable.
-// Top-aligned so frostedBackdrop() can line its blurred copy up with it.
+// Full-screen art, faded just enough that the title (bottom left), the clock and the rows stay readable.
+// Top-aligned so frostedBackdrop() can line its blurred copy up with it; its masks must match these.
 @Composable
 private fun Backdrop(image: ImageBitmap?, alpha: Float, parallax: Float) {
     // Null fades the art out (back to the wallpaper)
@@ -592,13 +602,13 @@ private fun Backdrop(image: ImageBitmap?, alpha: Float, parallax: Float) {
                 }
                 .drawWithContent {
                     drawContent()
-                    drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.5f), 0.25f to Color.Transparent))
+                    drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.35f), 0.2f to Color.Transparent))
                     drawRect(
-                        Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.2f), 0.6f to Color.Black),
+                        Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.45f), 0.55f to Color.Black),
                         blendMode = BlendMode.DstIn,
                     )
                     drawRect(
-                        Brush.verticalGradient(0.5f to Color.Black, 1f to Color.Transparent),
+                        Brush.verticalGradient(0.45f to Color.Black, 1f to Color.Black.copy(alpha = 0.2f)),
                         blendMode = BlendMode.DstIn,
                     )
                 },
@@ -606,7 +616,8 @@ private fun Backdrop(image: ImageBitmap?, alpha: Float, parallax: Float) {
     }
 }
 
-// Up from favourites focuses the button; left/right flips titles there, otherwise they rotate on their own
+// The focused app's title over its art: eyebrow, logo (or name), one line of facts, page dots. Titles rotate on their
+// own. A button only when it opens the title itself (Stremio); "Open Netflix" would just repeat the tile under it.
 @Composable
 private fun Hero(
     title: TrendingTitle,
@@ -618,69 +629,60 @@ private fun Hero(
     onStep: (Int) -> Unit,
     onFocusChange: (Boolean) -> Unit,
 ) {
-    Column(Modifier.height(HeroHeight).padding(horizontal = EdgePadding)) {
-        Text(label, color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    Column(Modifier.padding(horizontal = EdgePadding).padding(bottom = 6.dp)) {
+        Text(label, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(10.dp))
         if (logo != null) {
             Image(
                 logo,
                 contentDescription = title.title,
                 contentScale = ContentScale.Fit,
-                alignment = Alignment.CenterStart,
-                modifier = Modifier.height(68.dp).widthIn(max = 340.dp),
+                alignment = Alignment.BottomStart,
+                modifier = Modifier.height(72.dp).widthIn(max = 340.dp),
             )
         } else {
             Text(
                 title.title,
                 color = TextPrimary,
-                fontSize = 40.sp,
+                fontSize = 44.sp,
                 fontFamily = UiDisplay,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.height(68.dp).widthIn(max = 560.dp),
+                modifier = Modifier.widthIn(max = 600.dp),
             )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(title.meta, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            title.overview,
-            color = TextSecondary,
-            fontSize = 15.sp,
-            lineHeight = 21.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 520.dp),
-        )
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (title.action != null) {
-                Pill(
-                    R.drawable.ic_play,
-                    title.actionLabel,
-                    onOpen,
-                    Modifier
-                        .onFocusChanged { onFocusChange(it.isFocused) }
-                        .onPreviewKeyEvent {
-                            if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                            when (it.key) {
-                                Key.DirectionLeft -> onStep(-1)
-                                Key.DirectionRight -> onStep(1)
-                                else -> return@onPreviewKeyEvent false
-                            }
-                            true
-                        },
-                )
+            Text(title.meta, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            if (count > 1) {
                 Spacer(Modifier.width(18.dp))
+                PageDots(index, count)
             }
-            PageDots(index, count)
+        }
+        if (title.action?.data != null) {
+            Spacer(Modifier.height(14.dp))
+            Pill(
+                R.drawable.ic_play,
+                title.actionLabel,
+                onOpen,
+                Modifier
+                    .onFocusChanged { onFocusChange(it.isFocused) }
+                    .onPreviewKeyEvent {
+                        if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (it.key) {
+                            Key.DirectionLeft -> onStep(-1)
+                            Key.DirectionRight -> onStep(1)
+                            else -> return@onPreviewKeyEvent false
+                        }
+                        true
+                    },
+            )
         }
     }
 }
 
-// The focused tile, big: its name, and for the HDMI device (Apple TV) whether it's awake (from CEC). No button: the
-// tile itself opens it. Same height as Hero so the rows don't jump when focus moves between apps.
+// The focused tile's name, and for the HDMI device (Apple TV) whether it's awake (from CEC). No button: the tile opens it.
 @Composable
 private fun TileHero(title: String, label: String?, asleep: Boolean?, showStatus: Boolean) {
     val (status, dot) = when (asleep) {
@@ -688,13 +690,15 @@ private fun TileHero(title: String, label: String?, asleep: Boolean?, showStatus
         true -> "Asleep" to Color.White.copy(alpha = 0.4f)
         null -> "Connected" to Color.White.copy(alpha = 0.6f)
     }
-    Column(Modifier.height(HeroHeight).padding(horizontal = EdgePadding)) {
-        Text(label.orEmpty(), color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(6.dp))
+    Column(Modifier.padding(horizontal = EdgePadding).padding(bottom = 6.dp)) {
+        if (label != null) {
+            Text(label, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(4.dp))
+        }
         Text(
             title,
             color = TextPrimary,
-            fontSize = 64.sp,
+            fontSize = 54.sp,
             fontFamily = UiDisplay,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -705,7 +709,7 @@ private fun TileHero(title: String, label: String?, asleep: Boolean?, showStatus
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).background(dot, CircleShape))
                 Spacer(Modifier.width(8.dp))
-                Text(status, color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(status, color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -820,65 +824,21 @@ private fun rememberNow(): LocalDateTime {
     return now
 }
 
+// Just the time, small and light, top right (the header used to carry a greeting, date, weather and four buttons)
 @Composable
-private fun Header(
-    now: LocalDateTime,
-    onWifi: () -> Unit,
-    onSettings: () -> Unit,
-    onPicture: () -> Unit,
-    onSound: () -> Unit,
-) {
+private fun Clock(now: LocalDateTime, modifier: Modifier) {
     val context = LocalContext.current
-    val is24h = DateFormat.is24HourFormat(context)
-    val weather by produceState<Weather?>(null) {
-        while (true) {
-            value = withContext(Dispatchers.IO) { fetchWeather(context) } ?: value
-            delay(WEATHER_REFRESH_MS)
-        }
-    }
-
-    Row(Modifier.fillMaxWidth().padding(horizontal = EdgePadding), verticalAlignment = Alignment.CenterVertically) {
-        Row {
-            Text(
-                now.format(DateTimeFormatter.ofPattern(if (is24h) "HH:mm" else "h:mm")),
-                color = TextPrimary,
-                fontSize = 54.sp,
-                fontFamily = UiDisplay,
-                fontWeight = FontWeight.Light,
-                modifier = Modifier.alignByBaseline(),
-            )
-            if (!is24h) {
-                Text(
-                    " " + now.format(DateTimeFormatter.ofPattern("a")).uppercase(),
-                    color = TextSecondary,
-                    fontSize = 18.sp,
-                    modifier = Modifier.alignByBaseline(),
-                )
-            }
-        }
-        Spacer(Modifier.width(20.dp))
-        Column {
-            Text(greeting(now.hour), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            val weatherText = weather?.let { "  ·  ${it.temperature}° ${it.summary}" }.orEmpty()
-            Text(now.format(DateTimeFormatter.ofPattern("EEEE d MMMM")) + weatherText, color = TextSecondary, fontSize = 15.sp)
-        }
-        Spacer(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Pill(R.drawable.ic_picture, null, onPicture)
-            Pill(R.drawable.ic_sound, null, onSound)
-            Pill(R.drawable.ic_wifi, rememberNetworkLabel(), onWifi)
-            Pill(R.drawable.ic_settings, "Settings", onSettings)
-        }
-    }
+    val pattern = if (DateFormat.is24HourFormat(context)) "H:mm" else "h:mm"
+    Text(
+        now.format(java.time.format.DateTimeFormatter.ofPattern(pattern)),
+        color = TextPrimary.copy(alpha = 0.85f),
+        fontSize = 20.sp,
+        fontFamily = UiDisplay,
+        fontWeight = FontWeight.Medium,
+        modifier = modifier,
+    )
 }
 
-private fun greeting(hour: Int): String = when (hour) {
-    in 5..11 -> "Good morning"
-    in 12..16 -> "Good afternoon"
-    else -> "Good evening"
-}
-
-// Glass capsule; focused it turns solid white with dark content, like tvOS buttons
 @Composable
 private fun Pill(
     @DrawableRes icon: Int?,
@@ -1039,47 +999,13 @@ private fun GlassTileContent(app: TvApp, shape: RoundedCornerShape) {
         Modifier
             .fillMaxSize()
             .glass(shape)
-            .padding(16.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        Image(app.image, contentDescription = null, modifier = Modifier.size(30.dp))
+        Image(app.image, contentDescription = null, modifier = Modifier.size(22.dp))
         Spacer(Modifier.weight(1f))
-        Text(app.label, color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(app.label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (app.detail != null) {
-            Text(app.detail, color = TextSecondary, fontSize = 13.sp, maxLines = 1)
+            Text(app.detail, color = TextSecondary, fontSize = 11.sp, maxLines = 1)
         }
-    }
-}
-
-// SSID is only readable with location permission + location on; otherwise falls back to "Wi-Fi"
-@Composable
-private fun rememberNetworkLabel(): String {
-    val context = LocalContext.current
-    var label by remember { mutableStateOf(networkLabel(context)) }
-    DisposableEffect(Unit) {
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { label = networkLabel(context) }
-            override fun onLost(network: Network) { label = networkLabel(context) }
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) { label = networkLabel(context) }
-        }
-        cm.registerDefaultNetworkCallback(callback)
-        onDispose { cm.unregisterNetworkCallback(callback) }
-    }
-    return label
-}
-
-@Suppress("DEPRECATION") // connectionInfo is the only SSID API on Android 9
-private fun networkLabel(context: Context): String {
-    val cm = context.getSystemService(ConnectivityManager::class.java)
-    // AdGuard runs as a VPN, so the active network is the VPN; look at every network instead
-    val transports = cm.allNetworks.mapNotNull { cm.getNetworkCapabilities(it) }
-    if (transports.none { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }) return "Offline"
-    return when {
-        transports.any { it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) } -> "Ethernet"
-        transports.any { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } -> {
-            val ssid = context.applicationContext.getSystemService(WifiManager::class.java).connectionInfo.ssid
-            ssid?.trim('"')?.takeUnless { it.isBlank() || it == "<unknown ssid>" } ?: "Wi-Fi"
-        }
-        else -> "Online"
     }
 }

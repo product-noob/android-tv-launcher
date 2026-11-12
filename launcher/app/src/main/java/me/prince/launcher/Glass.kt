@@ -83,10 +83,11 @@ fun frostedBackdrop(backdrop: Bitmap, heightFraction: Float): ImageBitmap {
     val (w, h, px) = small
     for (y in 0 until h) {
         val v = y / (h * heightFraction)
-        val bottomFade = if (v < 0.5f) 1f else (1f - (v - 0.5f) / 0.5f).coerceIn(0f, 1f)
-        val topDarken = 1f - 0.5f * (1f - v / 0.25f).coerceIn(0f, 1f)
+        // Same masks as HomeScreen's Backdrop()
+        val bottomFade = if (v < 0.45f) 1f else 1f - 0.8f * ((v - 0.45f) / 0.55f).coerceIn(0f, 1f)
+        val topDarken = 1f - 0.35f * (1f - v / 0.2f).coerceIn(0f, 1f)
         for (x in 0 until w) {
-            val leftFade = 0.2f + 0.8f * (x / (w * 0.6f)).coerceAtMost(1f)
+            val leftFade = 0.45f + 0.55f * (x / (w * 0.55f)).coerceAtMost(1f)
             val k = bottomFade * topDarken * leftFade
             val p = px[y * w + x]
             val r = (((p shr 16) and 0xFF) * k).toInt()

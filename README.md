@@ -13,15 +13,14 @@ Written up end to end here: [How I Debloated My Android TV and Built My Own Laun
 
 ## Features
 
-- **Apple TV-style look.** Frosted glass buttons, rows that run off the screen edge, focus shown by a lift and a glow in the app's colour (no thick borders), and the [Inter](https://rsms.me/inter/) font in text and display sizes.
-- **Your HDMI device first.** If something on HDMI names itself over CEC (an Apple TV, a console), it's the hero of the home screen with an on/asleep status, and its button has focus, so Home → OK takes you straight back to it.
+- **Apple TV-style look.** Like tvOS: the focused app's art fills the screen, one row of five tiles sits under it, and the only other thing on screen is a small clock. Focus is a lift and a glow in the app's colour (no thick borders). [Inter](https://rsms.me/inter/) font in text and display sizes, or any variable font you point it at.
+- **Your HDMI device first.** If something on HDMI names itself over CEC (an Apple TV, a console), it's the first tile of the top row, named big with an on/asleep status, and it has focus, so Home → OK takes you straight back to it.
+- **Top shelf for streaming apps** (needs a free TMDB key). Rest on Netflix, Prime Video, JioHotstar, Sony LIV or the Apple TV app and the screen fills with what's popular on it in your country right now: art, logo, genre, rating. Fetched in the background every 6 hours, only while the home screen is showing.
 - **Living wallpaper.** A different image for dawn, day, dusk and night that crossfades as the day goes on. It stays still: a slow drift made detailed photos shimmer. `launcher/tools/wallpapers.py` makes the set: AI art with an OpenAI key, or gradient placeholders.
 - **The TV follows the Apple TV.** Turn the Apple TV off and the TV goes to sleep; turn the TV on and it opens the Apple TV's input (waking it). Needs a few adb grants, which `deploy.sh` does.
-- **Trending this week** (optional, shown when there's no HDMI device). Popular movies and shows from [TMDB](https://www.themoviedb.org/) with a full-width backdrop, logo, rating and summary. The button opens **the app that streams the title in your country** (Netflix, Prime Video, Disney+, Hotstar, Apple TV+, Hulu, Paramount+) if you have it installed, otherwise the title's page in Stremio if you have that.
-- **Your apps, your order.** A favourites row and an all-apps row. Long-press any tile to **move it, add it to or remove it from favourites**, or open App info.
-- **Recent** row of your most-used apps (favourites left out, since they're one row up).
+- **Trending this week** (optional, shown when there's no HDMI device). Popular movies and shows from [TMDB](https://www.themoviedb.org/) with a full-screen backdrop, logo and rating. The button opens **the app that streams the title in your country** (Netflix, Prime Video, Disney+, Hotstar, Apple TV+, Hulu, Paramount+) if you have it installed, otherwise the title's page in Stremio if you have that.
+- **Your apps, your order.** A favourites row and an all-apps row (with a Settings tile at the end); Down jumps straight to the next row. Long-press any tile to **move it, add it to or remove it from favourites**, or open App info.
 - **HDMI inputs as tiles** on TVs, named after the connected device where the TV reports it (e.g. "Apple TV · HDMI 1"). Hidden on streaming boxes.
-- **Header**: clock, greeting, date and weather ([Open-Meteo](https://open-meteo.com/), no key needed), plus Picture, Sound, Wi-Fi and Settings buttons.
 - **OLED care**: pure black background, the layout drifts a few pixels every two minutes, and the screen dims after a minute of no input and 25% at night. One switch turns it off on LCD TVs.
 
 ## What's inside
@@ -141,7 +140,7 @@ Always use the **release** build: it's optimised with R8, and debug Compose buil
 adb -s <tv-ip>:5555 shell am start -n me.prince.launcher/.MainActivity   # try it first
 ```
 
-`deploy.sh` installs the release build and grants, over adb: location (Wi-Fi name, weather), usage stats (Recent row), log access (CEC messages from the Apple TV), secure settings (so sleep turns the TV off instead of starting the screensaver) and "display over other apps" (opening the HDMI input from the background). It also enables the power service, pre-compiles the app and makes it the home activity. If you built on a different computer than last time, the install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; `./deploy.sh <tv-ip> --replace-signature` uninstalls first, which resets your favourites order.
+`deploy.sh` installs the release build and grants, over adb: location (only used by the old header's Wi-Fi name and weather), usage stats (which app is in front, for the power service), log access (CEC messages from the Apple TV), secure settings (so sleep turns the TV off instead of starting the screensaver) and "display over other apps" (opening the HDMI input from the background). It also enables the power service, pre-compiles the app and makes it the home activity. If you built on a different computer than last time, the install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; `./deploy.sh <tv-ip> --replace-signature` uninstalls first, which resets your favourites order.
 
 ### 6. Make it the home screen
 

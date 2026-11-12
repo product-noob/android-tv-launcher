@@ -16,8 +16,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-// Xiaomi TVs have a picture side panel (mode, backlight, OLED settings); everything else gets display settings
-private const val XIAOMI_PICTURE_SETTINGS = "com.mitv.settings.PICTURE_SETTINGS"
 // The first Home after boot goes straight to the Apple TV input
 private const val BOOT_WINDOW_MS = 180_000L
 
@@ -58,10 +56,6 @@ class MainActivity : ComponentActivity() {
                 onAppInfo = { app ->
                     launch(this, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}")))
                 },
-                onWifi = { launch(this, Intent(Settings.ACTION_WIFI_SETTINGS)) },
-                onSettings = { launch(this, Intent(Settings.ACTION_SETTINGS)) },
-                onPicture = { launch(this, pictureSettings()) },
-                onSound = { launch(this, Intent(Settings.ACTION_SOUND_SETTINGS)) },
                 // Stremio title links only work on a cold start; plain app launches don't need that
                 onOpenTrending = { if (it.data != null) launchFresh(this, it) else launch(this, it) },
             )
@@ -94,10 +88,5 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         unregisterReceiver(packageReceiver)
         super.onDestroy()
-    }
-
-    private fun pictureSettings(): Intent {
-        val xiaomi = Intent(XIAOMI_PICTURE_SETTINGS)
-        return if (packageManager.resolveActivity(xiaomi, 0) != null) xiaomi else Intent(Settings.ACTION_DISPLAY_SETTINGS)
     }
 }
