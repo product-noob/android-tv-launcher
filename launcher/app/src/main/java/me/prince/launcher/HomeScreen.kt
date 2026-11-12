@@ -236,14 +236,15 @@ fun HomeScreen(
         return true
     }
 
-    LaunchedEffect(apps.isNotEmpty(), homePresses, refocus) {
+    // Home starts on the Apple TV button when there is one, else the first favourite
+    LaunchedEffect(apps.isNotEmpty(), hdmiDevice != null, homePresses, refocus) {
         if (apps.isEmpty()) return@LaunchedEffect
         movingId = null
         scroll.animateScrollTo(0)
         favouritesRow.scrollToItem(0)
         // On cold start the tile may not be attached for a few frames; if focus is never set,
         // Android picks an arbitrary element (seen: the Settings pill)
-        firstTile.requestFocusWhenAttached()
+        (if (hdmiDevice != null) heroButton else firstTile).requestFocusWhenAttached()
     }
 
     val shownApp = focusedApp ?: favourites.firstOrNull() ?: others.firstOrNull()
@@ -253,6 +254,8 @@ fun HomeScreen(
     var heroIndex by remember { mutableIntStateOf(0) }
     var heroFocused by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
+        // No key: nothing to fetch, ever (the retry below would otherwise wake up every 15 s for nothing)
+        if (BuildConfig.TMDB_KEY.isBlank()) return@LaunchedEffect
         while (true) {
             // Keep the old titles if a refresh fails
             val fresh = withContext(Dispatchers.IO) { fetchTrending(context) }
@@ -285,6 +288,14 @@ fun HomeScreen(
     }
 
     val now = rememberNow()
+    // Trending only stands in for the hero when there's no HDMI device; otherwise the living wallpaper is the backdrop
+    val showTrending = hdmiDevice == null && hero != null
+    val part = dayPart(now.hour)
+    // Decoded only while the home screen is on screen; ~8 MB freed the moment an app or input takes over
+    val wallpaper by produceState<Wallpaper?>(null, visible, part, showTrending) {
+        value = if (visible && !showTrending) withContext(Dispatchers.Default) { loadWallpaper(context, part) } else null
+    }
+    val driftClock = rememberDriftClock(visible && !showTrending)
     var keyPresses by remember { mutableIntStateOf(0) }
     var idle by remember { mutableStateOf(false) }
     LaunchedEffect(keyPresses, resumes) {
@@ -343,13 +354,15 @@ fun HomeScreen(
                     }
                     .background(Background)
                     .drawBehind {
+                        // The wallpaper brings its own light; the app-colour glow is for the plain black screen
+                        if (!showTrending && wallpaper != null) return@drawBehind
                         drawRect(
                             Brush.radialGradient(
                                 0f to glow.copy(alpha = 0.9f),
                                 0.45f to glow.copy(alpha = 0.3f),
                                 1f to Color.Transparent,
                                 // With a backdrop up top, the glow sits behind the shelves instead
-                                center = Offset(size.width * 0.36f, size.height * if (hero != null) 0.85f else 0.42f),
+                                center = Offset(size.width * 0.36f, size.height * if (showTrending) 0.85f else 0.42f),
                                 radius = size.width * 0.6f,
                             )
                         )
@@ -357,14 +370,26 @@ fun HomeScreen(
                     }
             ) {
                 // Scrolling down dims the backdrop and lifts it a little slower than the page (parallax)
-                val fade = (scroll.value / with(density) { BackdropFadeDistance.toPx() }).coerceIn(0f, 1f)
+                val fadeDistance = with(density) { BackdropFadeDistance.toPx() }
+                val fade = (scroll.value / fadeDistance).coerceIn(0f, 1f)
                 val backdropAlpha = 1f - 0.75f * fade
                 val parallax = scroll.value * 0.4f
-                backdrops[heroIndex]?.let { Backdrop(it, backdropAlpha, parallax) }
-                val screenWidth = with(density) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
-                val glassSource = hero?.let {
-                    val height = screenWidth * it.frosted.height / it.frosted.width
-                    GlassSource(it.frosted, Rect(0f, -parallax, screenWidth, height - parallax), backdropAlpha)
+                val configuration = LocalConfiguration.current
+                val screenWidth = with(density) { configuration.screenWidthDp.dp.toPx() }
+                val screenSize = with(density) { Size(screenWidth, configuration.screenHeightDp.dp.toPx()) }
+                val glassSource = if (showTrending) {
+                    backdrops[heroIndex]?.let { Backdrop(it, backdropAlpha, parallax) }
+                    hero?.let {
+                        val height = screenWidth * it.frosted.height / it.frosted.width
+                        GlassSource(it.frosted, { Rect(0f, -parallax, screenWidth, height - parallax) }, { backdropAlpha })
+                    }
+                } else {
+                    // Read in the draw phase so scrolling and drift only redraw
+                    val wallpaperDim = { 0.5f * (scroll.value / fadeDistance).coerceIn(0f, 1f) }
+                    LivingWallpaper(wallpaper, driftClock, wallpaperDim)
+                    wallpaper?.let {
+                        GlassSource(it.frosted, { wallpaperBounds(screenSize, driftClock.value) }, { 1f - wallpaperDim() })
+                    }
                 }
                 CompositionLocalProvider(LocalGlassSource provides glassSource) {
                 Column(
