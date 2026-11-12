@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No events or window content: the service only uses the "lock screen" global action to put the TV to sleep -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/tv_power_service_description" />

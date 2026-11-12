@@ -51,5 +51,24 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".HotwordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Enabled via adb: settings put secure enabled_accessibility_services me.prince.launcher/.TvPowerService -->
+        <service
+            android:name=".TvPowerService"
+            android:exported="true"
+            android:label="@string/tv_power_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/tv_power_service" />
+        </service>
     </application>
 </manifest>
