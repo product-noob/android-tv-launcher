@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -487,9 +488,14 @@ fun HomeScreen(
                     }
                     Spacer(Modifier.height(4.dp))
                     val onFocused = { app: TvApp -> focusedApp = app }
-                    val onMenu = { app: TvApp -> openMenu(MenuTarget(app, canMove = false)) }
+                    // Recent is in recency order, so nothing to move there
+                    val onRecentMenu = { app: TvApp -> openMenu(MenuTarget(app, canMove = false)) }
                     // tvOS-style top row: the Apple TV first (OK opens it, which also wakes it over CEC), then favourites
                     val topRow = listOfNotNull(hdmiDevice) + favourites
+                    // Where Down goes from each row (its first tile); All apps' first tile is firstTile when the top row is empty
+                    val allAppsFirst = if (topRow.isEmpty()) firstTile else allAppsHead
+                    val belowInputs = if (recents.isNotEmpty()) recentHead else allAppsFirst
+                    val belowTop = if (otherInputs.isNotEmpty()) inputsHead else belowInputs
                     Shelf(
                         topRow,
                         favouritesRow,
@@ -500,17 +506,18 @@ fun HomeScreen(
                         FavouriteTileWidth,
                         FavouriteTileHeight,
                         FavouriteTileShape,
+                        down = belowTop,
                     )
                     if (otherInputs.isNotEmpty()) {
                         ShelfLabel("Inputs")
-                        Shelf(otherInputs, rememberLazyListState(), null, onLaunch, {}, onFocused)
+                        Shelf(otherInputs, rememberLazyListState(), inputsHead, onLaunch, {}, onFocused, down = belowInputs)
                     }
                     if (recents.isNotEmpty()) {
                         ShelfLabel("Recent")
-                        Shelf(recents, rememberLazyListState(), null, onLaunch, onMenu, onFocused)
+                        Shelf(recents, rememberLazyListState(), recentHead, onLaunch, onRecentMenu, onFocused, down = allAppsFirst)
                     }
                     ShelfLabel("All apps")
-                    Shelf(others, rememberLazyListState(), firstTile.takeIf { topRow.isEmpty() }, onLaunch, onMenu, onFocused)
+                    Shelf(others, allAppsRow, allAppsFirst, onLaunch, { openMenu(MenuTarget(it, canMove = true)) }, onFocused)
                     Spacer(Modifier.height(40.dp))
                 }
                 }
@@ -922,6 +929,8 @@ private fun Shelf(
     tileWidth: Dp = TileWidth,
     tileHeight: Dp = TileHeight,
     shape: RoundedCornerShape = TileShape,
+    // Where Down goes from any tile in this row (the next row's first tile)
+    down: FocusRequester? = null,
 ) {
     if (apps.isEmpty()) return
     LazyRow(
@@ -941,6 +950,7 @@ private fun Shelf(
                 height = tileHeight,
                 shape = shape,
                 modifier = Modifier
+                    .then(if (down != null) Modifier.focusProperties { this.down = down } else Modifier)
                     .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                     .onFocusChanged { if (it.isFocused) onFocused(app) },
             )
