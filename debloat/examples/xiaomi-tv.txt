@@ -1,16 +1,19 @@
-# Bloat removed from a Xiaomi OLED TV (Android TV 11, MediaTek). 32 packages.
+# Bloat removed from a Xiaomi OLED TV (Android TV 11, MediaTek). 31 packages.
 # Hidden with `pm uninstall -k --user 0`, so every one can be restored with restore.sh.
 # Other Xiaomi TVs ship a similar set; check `adb shell pm list packages` before using this as-is.
 #
 # NEVER remove on a TV: Live TV (com.mitv.livetv), anything com.mediatek.*, mitv.service, the remote's
 # Bluetooth service (com.mi.bluetooth), picture/sound settings (com.android.tv.settings), Play Services,
 # the keyboard, the setup wizards. Doing so can break the remote, the inputs or booting.
+# Also keep com.xiaomi.android.tvsetup.partnercustomizer: it provides the `tvlauncher.widget` provider that
+# com.mediatek.tv.service notifies on every network change. Without it that service crash-loops (~3x a second),
+# pegging the CPU and freezing Live TV / HDMI inputs.
+# After a debloat, check for crash loops: `adb shell dumpsys dropbox | grep -c system_app_crash` should stay flat.
 
 # Ads and tracking
 com.miui.tv.analytics
 com.xiaomi.statistic
 com.google.android.tvrecommendations
-com.xiaomi.android.tvsetup.partnercustomizer
 com.xm.webcontent
 com.mitv.overseaservice
 
